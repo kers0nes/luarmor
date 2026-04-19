@@ -1,6 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Routes } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 
 const client = new Client({
     intents: [
@@ -12,42 +10,28 @@ const client = new Client({
 });
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
 
 // Data storage
-let scripts = new Map(); // scriptId -> { name, code, author, host }
-let keys = new Map(); // key -> { used, user, expires }
+let scripts = new Map();
+let keys = new Map();
 let buyerRoleId = null;
 
-// Load data from files
-try {
-    if (fs.existsSync('./scripts.json')) {
-        const data = JSON.parse(fs.readFileSync('./scripts.json'));
-        scripts = new Map(data.scripts);
-    }
-    if (fs.existsSync('./keys.json')) {
-        const data = JSON.parse(fs.readFileSync('./keys.json'));
-        keys = new Map(data.keys);
-    }
-    if (fs.existsSync('./config.json')) {
-        const config = JSON.parse(fs.readFileSync('./config.json'));
-        buyerRoleId = config.buyerRoleId;
-    }
-} catch (e) {}
+// Sample data
+scripts.set('autofarm', {
+    name: 'Auto Farm Script',
+    code: `-- Auto Farm Script
+local player = game.Players.LocalPlayer
+while wait(0.5) do
+    print('Farming...')
+end`,
+    author: 'Admin'
+});
 
-// Save functions
-function saveScripts() {
-    fs.writeFileSync('./scripts.json', JSON.stringify({ scripts: Array.from(scripts.entries()) }));
-}
-
-function saveKeys() {
-    fs.writeFileSync('./keys.json', JSON.stringify({ keys: Array.from(keys.entries()) }));
-}
-
-function saveConfig() {
-    fs.writeFileSync('./config.json', JSON.stringify({ buyerRoleId }));
-}
+client.once('ready', () => {
+    console.log(`✅ ${client.user.tag} is online!`);
+    console.log(`📜 Loaded ${scripts.size} scripts`);
+    client.user.setActivity('!help | Luarmor Style', { type: 'WATCHING' });
+});
 
 // Generate random key
 function generateKey() {
@@ -56,65 +40,35 @@ function generateKey() {
     });
 }
 
-client.once('ready', async () => {
-    console.log(`✅ ${client.user.tag} is online!`);
-    
-    // Register slash commands
-    const commands = [
-        new SlashCommandBuilder().setName('stats').setDescription('View server statistics'),
-        new SlashCommandBuilder().setName('mykey').setDescription('View your key information'),
-        new SlashCommandBuilder().setName('freekey').setDescription('Claim a free key'),
-        new SlashCommandBuilder().setName('redeem').setDescription('Redeem a license key').addStringOption(option => option.setName('key').setDescription('Your license key').setRequired(true)),
-        new SlashCommandBuilder().setName('resethwid').setDescription('Reset your hardware ID'),
-        new SlashCommandBuilder().setName('getbuyerrole').setDescription('Claim your buyer role'),
-        new SlashCommandBuilder().setName('viewscript').setDescription('View a script').addStringOption(option => option.setName('name').setDescription('Script name').setRequired(true)),
-        
-        // Admin commands
-        new SlashCommandBuilder().setName('addscript').setDescription('Add a new script (Admin)').addStringOption(option => option.setName('name').setDescription('Script name').setRequired(true)).addStringOption(option => option.setName('code').setDescription('Lua code').setRequired(true)),
-        new SlashCommandBuilder().setName('removescript').setDescription('Remove a script (Admin)').addStringOption(option => option.setName('name').setDescription('Script name').setRequired(true)),
-        new SlashCommandBuilder().setName('setbuyerrole').setDescription('Set buyer role (Admin)').addRoleOption(option => option.setName('role').setDescription('Buyer role').setRequired(true)),
-        new SlashCommandBuilder().setName('redeemkeys').setDescription('Generate redeem keys (Admin)').addIntegerOption(option => option.setName('amount').setDescription('Number of keys').setRequired(true)),
-        new SlashCommandBuilder().setName('hostscript').setDescription('Host a script (Admin)').addStringOption(option => option.setName('name').setDescription('Script name').setRequired(true)).addStringOption(option => option.setName('code').setDescription('Lua code').setRequired(true)),
-        new SlashCommandBuilder().setName('panel').setDescription('Setup control panel (Admin)'),
-        new SlashCommandBuilder().setName('setup').setDescription('Setup the bot (Admin)')
-    ];
-    
-    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-    
-    try {
-        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ Slash commands registered!');
-    } catch (error) {
-        console.error('❌ Failed to register commands:', error);
-    }
-    
-    client.user.setActivity('/panel | Luarmor Style', { type: 'WATCHING' });
-});
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (!message.content.startsWith('!')) return;
 
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isCommand()) return;
+    const args = message.content.slice(1).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+    const isAdmin = message.member.permissions.has('Administrator');
+
+    // ========== PUBLIC COMMANDS ==========
     
-    const { commandName, user, member } = interaction;
-    const isAdmin = member.permissions.has('Administrator');
-    
-    // Public commands
-    if (commandName === 'stats') {
+    // !stats - View server statistics
+    if (command === 'stats') {
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('📊 Server Statistics')
             .addFields(
                 { name: 'Total Scripts', value: `${scripts.size}`, inline: true },
                 { name: 'Active Keys', value: `${keys.size}`, inline: true },
-                { name: 'Total Members', value: `${interaction.guild.memberCount}`, inline: true }
+                { name: 'Total Members', value: `${message.guild.memberCount}`, inline: true }
             )
             .setTimestamp();
-        await interaction.reply({ embeds: [embed] });
+        await message.channel.send({ embeds: [embed] });
     }
-    
-    if (commandName === 'mykey') {
+
+    // !mykey - View your key
+    if (command === 'mykey') {
         let userKey = null;
         for (let [key, data] of keys) {
-            if (data.user === user.id) {
+            if (data.user === message.author.id) {
                 userKey = { key, ...data };
                 break;
             }
@@ -126,88 +80,92 @@ client.on('interactionCreate', async (interaction) => {
                 .setTitle('🔑 Your Key')
                 .addFields(
                     { name: 'Key', value: `\`${userKey.key}\``, inline: false },
-                    { name: 'Expires', value: userKey.expires || 'Never', inline: true }
+                    { name: 'Status', value: userKey.used ? '✅ Activated' : '⏳ Not activated', inline: true }
                 );
-            await interaction.reply({ embeds: [embed] });
+            await message.channel.send({ embeds: [embed] });
         } else {
-            await interaction.reply({ content: '❌ You don\'t have a key! Use `/freekey` or `/redeem`', ephemeral: true });
+            await message.reply('❌ You don\'t have a key! Use `!freekey`');
         }
     }
-    
-    if (commandName === 'freekey') {
-        if (keys.size >= 100) {
-            return interaction.reply({ content: '❌ No free keys available!', ephemeral: true });
-        }
-        
+
+    // !freekey - Claim free key
+    if (command === 'freekey') {
         const newKey = generateKey();
         keys.set(newKey, { used: false, user: null, expires: null });
-        saveKeys();
-        
-        await interaction.reply({ content: `✅ Your free key: \`${newKey}\`\nUse \`/redeem ${newKey}\` to activate!`, ephemeral: true });
+        await message.reply(`✅ Your free key: \`${newKey}\`\nUse \`!redeem ${newKey}\` to activate!`);
     }
-    
-    if (commandName === 'redeem') {
-        const keyCode = interaction.options.getString('key');
+
+    // !redeem <key> - Redeem license key
+    if (command === 'redeem') {
+        const keyCode = args[0];
         const keyData = keys.get(keyCode);
         
         if (!keyData) {
-            return interaction.reply({ content: '❌ Invalid key!', ephemeral: true });
+            return message.reply('❌ Invalid key!');
         }
         
         if (keyData.used) {
-            return interaction.reply({ content: '❌ Key already used!', ephemeral: true });
+            return message.reply('❌ Key already used!');
         }
         
         keyData.used = true;
-        keyData.user = user.id;
+        keyData.user = message.author.id;
         keys.set(keyCode, keyData);
-        saveKeys();
         
         if (buyerRoleId) {
-            const role = interaction.guild.roles.cache.get(buyerRoleId);
-            if (role) await member.roles.add(role);
+            const role = message.guild.roles.cache.get(buyerRoleId);
+            if (role) await message.member.roles.add(role);
         }
         
-        await interaction.reply({ content: '✅ Key redeemed successfully! You now have access to scripts.', ephemeral: true });
+        await message.reply('✅ Key redeemed successfully! You now have access to scripts.');
     }
-    
-    if (commandName === 'resethwid') {
+
+    // !resethwid - Reset HWID
+    if (command === 'resethwid') {
         for (let [key, data] of keys) {
-            if (data.user === user.id) {
+            if (data.user === message.author.id) {
                 keys.delete(key);
-                saveKeys();
                 break;
             }
         }
-        await interaction.reply({ content: '✅ HWID reset! You can now use a new key.', ephemeral: true });
+        await message.reply('✅ HWID reset! You can now use a new key.');
     }
-    
-    if (commandName === 'getbuyerrole') {
+
+    // !getbuyerrole - Claim buyer role
+    if (command === 'getbuyerrole') {
         let hasKey = false;
         for (let [_, data] of keys) {
-            if (data.user === user.id && data.used) {
+            if (data.user === message.author.id && data.used) {
                 hasKey = true;
                 break;
             }
         }
         
         if (hasKey && buyerRoleId) {
-            const role = interaction.guild.roles.cache.get(buyerRoleId);
+            const role = message.guild.roles.cache.get(buyerRoleId);
             if (role) {
-                await member.roles.add(role);
-                await interaction.reply({ content: '✅ Buyer role granted!', ephemeral: true });
+                await message.member.roles.add(role);
+                await message.reply('✅ Buyer role granted!');
             }
         } else {
-            await interaction.reply({ content: '❌ You need to redeem a key first!', ephemeral: true });
+            await message.reply('❌ You need to redeem a key first! Use `!freekey` then `!redeem <key>`');
         }
     }
-    
-    if (commandName === 'viewscript') {
-        const scriptName = interaction.options.getString('name');
-        const script = scripts.get(scriptName);
+
+    // !viewscript <name> - View a script
+    if (command === 'viewscript') {
+        const scriptName = args.join(' ');
+        let script = null;
+        
+        for (let [_, s] of scripts) {
+            if (s.name.toLowerCase().includes(scriptName.toLowerCase())) {
+                script = s;
+                break;
+            }
+        }
         
         if (!script) {
-            return interaction.reply({ content: '❌ Script not found!', ephemeral: true });
+            return message.reply('❌ Script not found! Use `!scripts` to see available scripts.');
         }
         
         const embed = new EmbedBuilder()
@@ -218,91 +176,141 @@ client.on('interactionCreate', async (interaction) => {
                 { name: 'Code', value: `\`\`\`lua\n${script.code.substring(0, 1000)}\n\`\`\`` }
             );
         
-        await interaction.reply({ embeds: [embed] });
+        await message.channel.send({ embeds: [embed] });
     }
-    
-    // Admin commands
-    if (commandName === 'addscript' && isAdmin) {
-        const name = interaction.options.getString('name');
-        const code = interaction.options.getString('code');
+
+    // !scripts - List all scripts
+    if (command === 'scripts') {
+        if (scripts.size === 0) {
+            return message.reply('No scripts available yet. Admin use `!addscript`');
+        }
         
-        scripts.set(name, { name, code, author: user.tag, host: user.id });
-        saveScripts();
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('📜 Available Scripts')
+            .setDescription('Use `!viewscript <name>` to get a script');
         
-        await interaction.reply({ content: `✅ Script "${name}" added!`, ephemeral: true });
+        for (let [_, script] of scripts) {
+            embed.addFields({
+                name: script.name,
+                value: `Author: ${script.author}`,
+                inline: false
+            });
+        }
+        
+        await message.channel.send({ embeds: [embed] });
     }
+
+    // ========== ADMIN COMMANDS ==========
     
-    if (commandName === 'removescript' && isAdmin) {
-        const name = interaction.options.getString('name');
+    // !addscript <name> <code> - Add a new script
+    if (command === 'addscript' && isAdmin) {
+        if (args.length < 2) {
+            return message.reply('Usage: `!addscript <name> <code>`');
+        }
         
-        if (scripts.delete(name)) {
-            saveScripts();
-            await interaction.reply({ content: `✅ Script "${name}" removed!`, ephemeral: true });
+        const name = args[0];
+        const code = args.slice(1).join(' ');
+        
+        scripts.set(name.toLowerCase(), { name, code, author: message.author.tag });
+        await message.reply(`✅ Script "${name}" added!`);
+    }
+
+    // !removescript <name> - Remove a script
+    if (command === 'removescript' && isAdmin) {
+        const name = args[0];
+        
+        if (scripts.delete(name.toLowerCase())) {
+            await message.reply(`✅ Script "${name}" removed!`);
         } else {
-            await interaction.reply({ content: '❌ Script not found!', ephemeral: true });
+            await message.reply('❌ Script not found!');
         }
     }
-    
-    if (commandName === 'setbuyerrole' && isAdmin) {
-        const role = interaction.options.getRole('role');
+
+    // !setbuyerrole @role - Set buyer role
+    if (command === 'setbuyerrole' && isAdmin) {
+        const role = message.mentions.roles.first();
+        if (!role) {
+            return message.reply('Usage: `!setbuyerrole @role`');
+        }
+        
         buyerRoleId = role.id;
-        saveConfig();
-        await interaction.reply({ content: `✅ Buyer role set to ${role.name}!`, ephemeral: true });
+        await message.reply(`✅ Buyer role set to ${role.name}!`);
     }
-    
-    if (commandName === 'redeemkeys' && isAdmin) {
-        const amount = interaction.options.getInteger('amount');
+
+    // !redeemkeys <amount> - Generate redeem keys
+    if (command === 'redeemkeys' && isAdmin) {
+        const amount = parseInt(args[0]) || 5;
         const generatedKeys = [];
         
-        for (let i = 0; i < amount; i++) {
+        for (let i = 0; i < Math.min(amount, 20); i++) {
             const newKey = generateKey();
             keys.set(newKey, { used: false, user: null, expires: null });
             generatedKeys.push(newKey);
         }
-        saveKeys();
         
-        await interaction.reply({ content: `✅ Generated ${amount} keys:\n\`\`\`\n${generatedKeys.join('\n')}\n\`\`\``, ephemeral: true });
+        await message.reply(`✅ Generated ${generatedKeys.length} keys:\n\`\`\`\n${generatedKeys.join('\n')}\n\`\`\``);
     }
-    
-    if (commandName === 'hostscript' && isAdmin) {
-        const name = interaction.options.getString('name');
-        const code = interaction.options.getString('code');
+
+    // !hostscript <name> <code> - Host a script
+    if (command === 'hostscript' && isAdmin) {
+        if (args.length < 2) {
+            return message.reply('Usage: `!hostscript <name> <code>`');
+        }
         
-        scripts.set(name, { name, code, author: user.tag, host: user.id });
-        saveScripts();
+        const name = args[0];
+        const code = args.slice(1).join(' ');
         
-        await interaction.reply({ content: `✅ Script "${name}" hosted!`, ephemeral: true });
+        scripts.set(name.toLowerCase(), { name, code, author: message.author.tag, hosted: true });
+        await message.reply(`✅ Script "${name}" hosted!`);
     }
-    
-    if (commandName === 'panel' && isAdmin) {
+
+    // !panel - Control panel
+    if (command === 'panel' && isAdmin) {
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('🎮 Luarmor Control Panel')
-            .setDescription('Use these commands to manage the bot')
+            .setDescription('**Public Commands:**')
             .addFields(
-                { name: '📜 Script Management', value: '`/addscript` `/removescript` `/hostscript` `/viewscript`', inline: false },
-                { name: '🔑 Key System', value: '`/redeemkeys` `/freekey` `/mykey`', inline: false },
-                { name: '⚙️ Role Setup', value: '`/setbuyerrole` `/getbuyerrole`', inline: false },
-                { name: '📊 Info', value: '`/stats` `/resethwid`', inline: false }
+                { name: '📊 Info', value: '`!stats` `!mykey` `!scripts`', inline: true },
+                { name: '🔑 Keys', value: '`!freekey` `!redeem <key>` `!resethwid`', inline: true },
+                { name: '📜 Scripts', value: '`!viewscript <name>` `!getbuyerrole`', inline: true },
+                { name: '\u200B', value: '**Admin Commands:**', inline: false },
+                { name: '⚙️ Management', value: '`!addscript` `!removescript` `!hostscript`', inline: true },
+                { name: '🔐 Key System', value: '`!redeemkeys <amount>` `!setbuyerrole @role`', inline: true }
             )
             .setTimestamp();
         
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        await message.channel.send({ embeds: [embed] });
     }
-    
-    if (commandName === 'setup' && isAdmin) {
+
+    // !setup - Setup guide
+    if (command === 'setup' && isAdmin) {
         const embed = new EmbedBuilder()
             .setColor(0x00FF00)
             .setTitle('⚙️ Setup Guide')
-            .setDescription('Follow these steps to setup your bot:')
+            .setDescription('Follow these steps:')
             .addFields(
-                { name: '1️⃣ Set Buyer Role', value: '`/setbuyerrole @role`', inline: false },
-                { name: '2️⃣ Generate Keys', value: '`/redeemkeys 10`', inline: false },
-                { name: '3️⃣ Add Scripts', value: '`/addscript name code`', inline: false },
-                { name: '4️⃣ View Panel', value: '`/panel`', inline: false }
+                { name: '1️⃣ Set Buyer Role', value: '`!setbuyerrole @role`', inline: false },
+                { name: '2️⃣ Generate Keys', value: '`!redeemkeys 10`', inline: false },
+                { name: '3️⃣ Add Scripts', value: '`!addscript name code`', inline: false },
+                { name: '4️⃣ View Panel', value: '`!panel`', inline: false }
             );
         
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        await message.channel.send({ embeds: [embed] });
+    }
+
+    // !help - Show all commands
+    if (command === 'help') {
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle('📚 Commands List')
+            .addFields(
+                { name: 'Public Commands', value: '`!stats` `!mykey` `!freekey` `!redeem <key>` `!resethwid` `!getbuyerrole` `!viewscript <name>` `!scripts` `!help`', inline: false },
+                { name: 'Admin Commands', value: '`!addscript` `!removescript` `!setbuyerrole` `!redeemkeys` `!hostscript` `!panel` `!setup`', inline: false }
+            );
+        
+        await message.channel.send({ embeds: [embed] });
     }
 });
 
